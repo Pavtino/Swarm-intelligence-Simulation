@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Swarm Intelligence Simulation</title>
+    <style>
+        body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #1a1a2e;
+            color: #ffffff;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+        }
+
+        h1 {
+            color: #e94560;
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        canvas {
+            background-color: #2c2a4a;
+            border: 2px solid #5267a5;
+            border-radius: 12px;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+            max-width: 90%;
+            touch-action: none;
+        }
+
+        .controls {
+            margin-top: 20px;
+            display: flex;
+            gap: 15px;
+            font-size: 14px;
+        }
+
+        .info {
+            margin-top: 10px;
+            text-align: center;
+            font-size: 16px;
+            color: #ffffff;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Swarm Intelligence Simulation</h1>
+    <div class="info">Collected Resources: <span id="collected-count">0</span></div>
+    <canvas id="simulationCanvas"></canvas>
+
+    <script>
+        // Set up the canvas and context
+        const canvas = document.getElementById('simulationCanvas');
+        const ctx = canvas.getContext('2d');
+        let animationFrameId;
+
+        // Make the canvas responsive
+        function resizeCanvas() {
+            canvas.width = Math.min(window.innerWidth * 0.9, 800);
+            canvas.height = Math.min(window.innerHeight * 0.7, 600);
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        // --- Core Simulation Classes ---
+
+        // Vector class for simple 2D math
+        class Vector {
+            constructor(x = 0, y = 0) {
+                this.x = x;
+                this.y = y;
+            }
+            add(v) { this.x += v.x; this.y += v.y; }
+            subtract(v) { this.x -= v.x; this.y -= v.y; }
+            magnitude() { return Math.sqrt(this.x * this.x + this.y * this.y); }
+            normalize() {
+                const m = this.magnitude();
+                if (m > 0) {
+                    this.x /= m;
+                    this.y /= m;
+                }
+            }
+            static subtract(v1, v2) {
+                return new Vector(v1.x - v2.x, v1.y - v2.y);
+            }
+        }
+
+        // Agent class (the "foragers")
+        class Agent {
+            constructor(x, y) {
+                this.position = new Vector(x, y);
+                this.velocity = new Vector(Math.random() * 2 - 1, Math.random() * 2 - 1);
+                this.velocity.normalize();
+                this.velocity.x *= 1.5;
+                this.velocity.y *= 1.5;
+                this.radius = 5;
+                this.color = '#8be9fd';
+                this.state = 'searching'; // 'searching', 'carrying'
+                this.target = null;
+            }
+
+            draw() {
+                ctx.beginPath();
+                ctx.arc(this.position.x, this.position.y, this.radius, 0, Math.PI * 2);
+                ctx.fillStyle = this.color;
+                ctx.fill();
+            }
+
+            update(resources, hubPosition) {
+                // Change state based on current location and goals
+                if (this.state === 'searching') {
+                    // Look for the closest resource
+                    let closestResource = null;
+                    let minDist = Infinity;
+                    resources.forEach(res => {
+                        const dist = Vector.subtract(res.position, this.position).magnitude();
+                        if (dist < minDist) {
+                            minDist = dist;
+                            closestResource = res;
+                        }
+                    });
+
+                    // If a resource is nearby, set it as the target
+                    if (closestResource && minDist < 100) { // Detection radius
+                        this.target = closestResource;
+                    }
+
+                    // Move towards the target if one exists, otherwise wander
+                    if (this.target) {
+                        const desiredVelocity = Vector.subtract(this.target.position, this.position);
+                        desiredVelocity.normalize();
+                        desiredVelocity.x *= 1.5;
+                        desiredVelocity.y *= 1.5;
+                        this.velocity = desiredVelocity;
+                    } else {
+                        // Wander: add a small random change to velocity
+                        this.velocity.x += (Math.random() - 0.5) * 0.1;
+                        this.velocity.y += (Math.random() - 0.5) * 0.1;
+                        this.velocity.normalize();
+                        this.velocity.x *= 1.5;
+                        this.velocity.y *= 1.5;
+                    }
+
+                    // Check for collision with target resource
+                    if (this.target && Vector.subtract(this.target.position, this.position).magnitude() < 10) {
+                        this.state = 'carrying';
+                        this.target.isCollected = true;
+                        this.target = hubPosition;
+                        this.color = '#f1fa8c'; // Change color to show it's carrying something
+                    }
+                } else if (this.state === 'carrying') {
+                    // Move towards the hub
+                    const desiredVelocity = Vector.subtract(hubPosition, this.position);
+                    desiredVelocity.normalize();
+                    desiredVelocity.x *= 1.5;
+                    desiredVelocity.y *= 1.5;
+                    this.velocity = desiredVelocity;
+
+                    // Check for arrival at the hub
+                    if (Vector.subtract(hubPosition, this.position).magnitude() < 20) {
+                        this.state = 'searching';
+                        this.target = null;
+                        this.color = '#8be9fd';
+                        // Signal that a resource was collected
+                        document.getElementById('collected-count').textContent = parseInt(document.getElementById('collected-count').textContent) + 1;
+                    }
+                }
+
+                this.position.add(this.velocity);
+
+                // Boundary checks
+                if (this.position.x < 0 || this.position.x > canvas.width) {
+                    this.velocity.x *= -1;
+                }
+                if (this.position.y < 0 || this.position.y > canvas.height) {
+                    this.velocity.y *= -1;
+                }
+            }
+        }
+
+        // Resource class (the items to be collected)
+        class Resource {
+            constructor(x, y) {
+                this.position = new Vector(x, y);
+                this.radius = 5;
+                this.color = '#ffb86c';
+                this.isCollected = false;
+            }
+
+            draw() {
+                if (!this.isCollected) {
+                    ctx.beginPath();
+                    ctx.arc(this.position.x, this.position.y, this.radius, 0, Math.PI * 2);
+                    ctx.fillStyle = this.color;
+                    ctx.fill();
+                }
+            }
+        }
+
+        // --- Minimal Test Simulation Setup ---
+        const agents = [];
+        const resources = [];
+        const numAgents = 10;
+        const numResources = 30;
+        const hubPosition = new Vector(canvas.width / 2, canvas.height / 2);
+
+        // Populate agents
+        for (let i = 0; i < numAgents; i++) {
+            agents.push(new Agent(
+                Math.random() * canvas.width,
+                Math.random() * canvas.height
+            ));
+        }
+
+        // Populate resources
+        function generateResources() {
+            resources.length = 0;
+            document.getElementById('collected-count').textContent = 0;
+            for (let i = 0; i < numResources; i++) {
+                // Ensure resources are not spawned on the hub
+                let x, y;
+                do {
+                    x = Math.random() * canvas.width;
+                    y = Math.random() * canvas.height;
+                } while (Vector.subtract(new Vector(x, y), hubPosition).magnitude() < 50);
+                resources.push(new Resource(x, y));
+            }
+        }
+
+        // Initial setup
+        generateResources();
+
+        // --- Animation Loop ---
+        function animate() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Draw hub
+            ctx.beginPath();
+            ctx.arc(hubPosition.x, hubPosition.y, 15, 0, Math.PI * 2);
+            ctx.fillStyle = '#6272a4';
+            ctx.fill();
+            ctx.fillStyle = '#f8f8f2';
+            ctx.font = '10px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('Hub', hubPosition.x, hubPosition.y + 3);
+
+            // Update and draw agents
+            agents.forEach(agent => {
+                agent.update(resources.filter(r => !r.isCollected), hubPosition);
+                agent.draw();
+            });
+
+            // Draw resources
+            resources.forEach(resource => {
+                resource.draw();
+            });
+
+            // If all resources are collected, re-generate them
+            if (resources.every(r => r.isCollected)) {
+                setTimeout(generateResources, 2000);
+            }
+
+            animationFrameId = requestAnimationFrame(animate);
+        }
+
+        // Start the simulation when the window loads
+        window.onload = function() {
+            if (animationFrameId) {
+                cancelAnimationFrame(animationFrameId);
+            }
+            animate();
+        };
+
+    </script>
+
+</body>
+</html>
